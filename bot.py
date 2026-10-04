@@ -439,7 +439,7 @@ COMMANDS = [
      restock_command),
     (["sell"], "Best place to sell: every /travel item grouped by method, or one item in detail",
      sell_command),
-    (["sell-held", "sh"], "Travel items in your inventory worth selling, how many, and where each sells best",
+    (["sell-held", "sh"], "Travel items in your inventory, how many, and where each sells best",
      held_command),
     (["stocks"], "Your stocks, dividend blocks you can afford, and the most stable stocks", stocks_command),
     (["spend"], "What you'll need to pay: rent, upkeep and your entries, until next rent", spend_command),

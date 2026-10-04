@@ -39,9 +39,6 @@ USER_AGENT = "torncierge (personal bot; github.com/Veniche/torncierge)"
 
 TYPE_ICONS = {"Plushie": "🧸 ", "Flower": "🌸 "}
 
-# /sell-held hides items whose total value is below this.
-HELD_MIN_VALUE = 50_000
-
 # Items shown per trip-length group; keeps the report under Discord's
 # 6,000-character limit per message.
 TOP_PER_GROUP = 8
@@ -632,17 +629,14 @@ class StockTracker:
         return embeds
 
     def held_embeds(self, held: dict[int, int]) -> list[dict]:
-        """Travel items in your inventory worth selling, grouped by where they sell best."""
+        """Travel items in your inventory, grouped by where they sell best."""
         if not self.latest or not self.items:
             return [{"title": "Travel items you hold", "description": "No stock data yet — try again in a minute."}]
         by_method: dict[str, list[tuple[int, str]]] = {}
-        total = small = unchecked = 0
+        total = unchecked = 0
         for item_id in self.held_candidates() & held.keys():
             qty = held[item_id]
             net, where = self.best_sale(item_id)
-            if net * qty < HELD_MIN_VALUE:
-                small += 1
-                continue
             total += net * qty
             unchecked += item_id not in self.listings
             name = TYPE_ICONS.get(self.items[item_id]["type"], "") + self.items[item_id]["name"]
@@ -650,16 +644,14 @@ class StockTracker:
             by_method.setdefault(where, []).append(
                 (net * qty, f"**{name}** ×{qty:,} — ${net:,} each · **${net * qty:,}**{estimate}"))
         if not by_method:
-            hidden = f" ({small} under {money(HELD_MIN_VALUE)} hidden)" if small else ""
-            return [{"title": "Travel items you hold", "description": f"Nothing worth selling{hidden}."}]
+            return [{"title": "Travel items you hold", "description": "No /sell items, plushies or flowers in your inventory."}]
         embeds = []
         for where in sorted(by_method, key=lambda w: (w == "item market", w)):
             lines = [line for _, line in sorted(by_method[where], reverse=True)]
             embeds.append({"title": f"Sell to {self._via(where)} ({len(lines)})", "description": "\n".join(lines)})
         count = sum(len(lines) for lines in by_method.values())
-        hidden = f" · {small} under {money(HELD_MIN_VALUE)} hidden" if small else ""
         note = f" · *market price estimated, listing not checked ({unchecked})" if unchecked else ""
         embeds[-1]["footer"] = {"text": f"{count} item{'s' if count != 1 else ''} worth {money(total)} at best "
                                         f"sale · net of {self.market_fee:.0%} market fee and "
-                                        f"${self.market_undercut:,} undercut{hidden}{note}"}
+                                        f"${self.market_undercut:,} undercut{note}"}
         return embeds
