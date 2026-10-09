@@ -4,6 +4,8 @@ drug cooldown ends. When you're about to land back in Torn it also sends a
 foreign stock report for your next trip (or run /travel any time). /sell
 compares TornExchange traders with the item market for any item. /stocks
 shows where your money earns dividends, and a DM fires when one is ready.
+/war lists enemy faction members you can beat and hit right now; war
+watch and chain guard DM you during wars.
 
 Polls Torn's API for your travel status and cooldowns. Once a trip or
 cooldown is detected, it schedules a single precise alert, rather than
@@ -27,6 +29,7 @@ from dotenv import load_dotenv
 import spending
 import market
 import travel
+import war
 
 load_dotenv()
 
@@ -52,6 +55,14 @@ STOCK_POLL_SECONDS = int(os.getenv("STOCK_POLL_SECONDS", "300"))
 # Items /sell-held never offers for sale (comma-separated names), e.g. the
 # drugs you keep for happy jumps.
 KEEP_ITEMS = [n.strip() for n in (os.getenv("KEEP_ITEMS") or "").split(",") if n.strip()]
+# Wars: FF Scouter key (a Torn key registered at ffscouter.com) for strength
+# estimates, the highest fair fight that counts as beatable, and the chain
+# guard's warning point.
+FF_SCOUTER_KEY = os.getenv("FF_SCOUTER_KEY") or None
+WAR_MAX_FF = float(os.getenv("WAR_MAX_FF", "3"))
+WAR_POLL_SECONDS = int(os.getenv("WAR_POLL_SECONDS", "30"))
+CHAIN_GUARD_SECONDS = int(os.getenv("CHAIN_GUARD_SECONDS", "90"))
+CHAIN_GUARD_MIN_HITS = int(os.getenv("CHAIN_GUARD_MIN_HITS", "10"))
 STATE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state.json")
 
 # Cooldowns only come back as "seconds remaining", so the end time we
@@ -96,6 +107,9 @@ def item_buy_price(name: str) -> tuple[int, str] | None:
 RENT_ALERT_DAYS = [int(d) for d in (os.getenv("RENT_ALERT_DAYS") or "1").split(",") if d.strip()]
 SPENDING_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "spending.json")
 spend = spending.Spending(SPENDING_PATH, TORN_API_KEY, item_buy_price)
+WAR_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "war.json")
+wars = war.War(WAR_PATH, TORN_API_KEY, FF_SCOUTER_KEY, WAR_MAX_FF, WAR_POLL_SECONDS,
+               CHAIN_GUARD_SECONDS, CHAIN_GUARD_MIN_HITS)
 
 # Arrival timestamp we've already scheduled an alert for, so a repeat
 # poll of the same trip doesn't schedule a second alert.
@@ -108,6 +122,8 @@ drug_task: asyncio.Task | None = None
 
 poll_task: asyncio.Task | None = None
 stock_task: asyncio.Task | None = None
+war_task: asyncio.Task | None = None
+chain_task: asyncio.Task | None = None
 
 
 async def fetch_status(session: aiohttp.ClientSession) -> dict:
@@ -243,6 +259,20 @@ async def stock_loop() -> None:
         except Exception as exc:
             log.error("Rent check failed: %s", exc)
         await asyncio.sleep(STOCK_POLL_SECONDS)
+
+
+async def tick_loop(name: str, tick) -> None:
+    """Run a war-watch or chain-guard poll; each one says when it wants the next."""
+    await client.wait_until_ready()
+    while not client.is_closed():
+        delay = WAR_POLL_SECONDS
+        try:
+            messages, delay = await tick(http)
+            for message in messages:
+                await send_dm(message)
+        except Exception as exc:
+            log.error("%s failed: %s", name, exc)
+        await asyncio.sleep(delay)
 
 
 async def owner_only(interaction: discord.Interaction) -> bool:
@@ -431,6 +461,50 @@ async def spend_remove_command(interaction: discord.Interaction, name: str) -> N
         await interaction.response.send_message(f"No entry called {name!r}.", ephemeral=True)
 
 
+@app_commands.describe(faction="Faction ID to scout (default: your ranked war's enemy)")
+async def war_command(interaction: discord.Interaction, faction: Optional[int] = None) -> None:
+    if not await owner_only(interaction):
+        return
+    await interaction.response.defer(thinking=True)
+    try:
+        embeds = await wars.report_embeds(http, faction)
+    except Exception as exc:
+        log.error("War report failed: %s", exc)
+        await interaction.followup.send(f"Couldn't build the war report: {exc}")
+        return
+    await interaction.followup.send(embeds=[discord.Embed.from_dict(e) for e in embeds])
+
+
+ON_OFF = [app_commands.Choice(name="on", value="on"), app_commands.Choice(name="off", value="off")]
+
+
+@app_commands.describe(state="on: DM during ranked wars when a beatable target becomes hittable · off")
+@app_commands.choices(state=ON_OFF)
+async def war_watch_command(interaction: discord.Interaction,
+                            state: Optional[app_commands.Choice[str]] = None) -> None:
+    if not await owner_only(interaction):
+        return
+    if state:
+        wars.set_watch(state.value == "on")
+    await interaction.response.send_message(
+        f"War watch is **{'on' if wars.watch else 'off'}**"
+        + (" — it runs whenever your faction is in a ranked war." if wars.watch else "."))
+
+
+@app_commands.describe(state="on: DM when your faction's chain is about to time out · off")
+@app_commands.choices(state=ON_OFF)
+async def chain_guard_command(interaction: discord.Interaction,
+                              state: Optional[app_commands.Choice[str]] = None) -> None:
+    if not await owner_only(interaction):
+        return
+    if state:
+        wars.set_chain_guard(state.value == "on")
+    await interaction.response.send_message(
+        f"Chain guard is **{'on' if wars.chain_guard else 'off'}**"
+        + (f" — DMs when a chain of {CHAIN_GUARD_MIN_HITS}+ hits has under {CHAIN_GUARD_SECONDS}s left."
+           if wars.chain_guard else "."))
+
+
 # Discord has no command aliases, so each extra name is its own command
 # pointing at the same handler.
 COMMANDS = [
@@ -445,6 +519,9 @@ COMMANDS = [
     (["spend"], "What you'll need to pay: rent, upkeep and your entries, until next rent", spend_command),
     (["spend-add"], "Add or replace a spending entry (cash or items, one-off or repeating)", spend_add_command),
     (["spend-remove"], "Remove a spending entry", spend_remove_command),
+    (["war"], "Enemy faction: who you can beat and hit right now, who's out soon", war_command),
+    (["war-watch"], "Turn the ranked-war DM (beatable target hittable) on or off", war_watch_command),
+    (["chain-guard"], "Turn the chain timeout DM on or off", chain_guard_command),
 ]
 for names, description, callback in COMMANDS:
     for name in names:
@@ -464,13 +541,17 @@ client.setup_hook = setup_hook
 
 @client.event
 async def on_ready() -> None:
-    global poll_task, stock_task
+    global poll_task, stock_task, war_task, chain_task
     log.info("Logged in as %s", client.user)
     # on_ready fires again after reconnects; only ever run one of each loop.
     if poll_task is None or poll_task.done():
         poll_task = asyncio.create_task(poll_loop())
     if stock_task is None or stock_task.done():
         stock_task = asyncio.create_task(stock_loop())
+    if war_task is None or war_task.done():
+        war_task = asyncio.create_task(tick_loop("War watch", wars.watch_tick))
+    if chain_task is None or chain_task.done():
+        chain_task = asyncio.create_task(tick_loop("Chain guard", wars.chain_tick))
 
 
 if __name__ == "__main__":

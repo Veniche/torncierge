@@ -3,7 +3,7 @@
 <img src="assets/torncierge.png" alt="Torncierge icon" width="96">
 
 A Discord helper bot for Torn City: travel alerts and trade planning,
-selling, stock-market dividends and spending — growing as new tools are
+selling, stock-market dividends, spending and faction wars — growing as new tools are
 added.
 
 DMs you on Discord a few seconds before your flight lands in Torn,
@@ -29,6 +29,9 @@ the bot's DMs give you the same report and more on demand — see
 | `/spend-add name amount every [due]` | — | Add or replace an entry. `amount`: cash (`4m`) or items (`5 xanax`, priced at the lowest listing). `every`: `once`, `daily`, `weekly` or `7d`. `due`: `today`, `tomorrow` or `3d` (optional). |
 | `/spend-remove name` | — | Remove an entry (names autocomplete). |
 | `/sell item:<name> [qty]` | — | One item in detail: every way to sell it, for `qty` units (default: your travel capacity). Checks its live lowest listing. Item names autocomplete. |
+| `/war [faction]` | — | The enemy in your faction's ranked war (or any `faction` ID): who you can beat and hit right now where you are, sorted by fair fight, with attack links; who's out of hospital soon or elsewhere; who's too strong. Plus the war score and your energy and life. |
+| `/war-watch [on\|off]` | — | Turn the war-watch DM on or off (no option: show the current setting). On by default. |
+| `/chain-guard [on\|off]` | — | Turn the chain-timeout DM on or off (no option: show the current setting). On by default. |
 
 Discord has no real aliases, so each alias is its own entry in the `/`
 menu. Commands only answer the user in `DISCORD_USER_ID`; anyone else gets
@@ -44,6 +47,8 @@ until then, typing the name just sends a plain message the bot ignores.
 | Right after the alert for a landing in Torn | The `/travel` stock report |
 | Drug cooldown reaches 0 | 💊 Drug cooldown is over |
 | A rented property's lease reaches a `RENT_ALERT_DAYS` value | 🏝️ *Property* lease: *N* day(s) left — renewing costs ≈ *last lease cost* |
+| During a ranked war (war watch on), someone you can beat becomes hittable where you are | 🎯 Hittable now: *names with attack links* |
+| Your faction's chain (10+ hits) has under `CHAIN_GUARD_SECONDS` left (chain guard on) | ⛓️ Chain at *N* drops in ~*s* — with the best hittable war target |
 | A stock dividend you hold a block for is ready | 💰 *STOCK* dividend ready — *payout* (once per dividend; again after a restart if still uncollected) |
 
 ## 1. Create the Discord bot
@@ -87,6 +92,8 @@ TORN_API_KEY=your-api-key
 # ITEM_MARKET_FEE=5
 # RENT_ALERT_DAYS=1
 # KEEP_ITEMS=Xanax,Ecstasy
+# FF_SCOUTER_KEY=your-torn-key-registered-at-ffscouter
+# WAR_MAX_FF=3
 # POLL_INTERVAL_SECONDS=60
 ```
 
@@ -141,6 +148,14 @@ journalctl -u torncierge -f           # tail logs
 - `KEEP_ITEMS` — item names `/sell-held` never offers for sale, comma-separated
   (e.g. `Xanax,Ecstasy` if you keep them for happy jumps). Suitcases are
   always kept.
+- `FF_SCOUTER_KEY` — a Torn API key registered at [FF Scouter](https://ffscouter.com),
+  for enemy strength estimates in `/war` and war watch. Use a separate
+  Limited key, not `TORN_API_KEY`: FF Scouter reads your battle stats and
+  attacks with it. Without it, everyone counts as beatable.
+- `WAR_MAX_FF` — highest fair fight that counts as beatable (default 3).
+- `WAR_POLL_SECONDS` — how often war watch and chain guard check (default 30).
+- `CHAIN_GUARD_SECONDS` / `CHAIN_GUARD_MIN_HITS` — DM when a chain of at
+  least this many hits (default 10) has fewer seconds left (default 90).
 - `STOCK_POLL_SECONDS` — how often stock snapshots are taken (default 300).
 
 Set these in `.env`, then restart the service
@@ -225,6 +240,34 @@ Entries are kept in `spending.json` next to the script — git-ignored, only
 on the machine running the bot (the repo is public), and not touched by
 deleting `state.json`. The rent-alert DM is the only automatic message;
 everything else here is on demand.
+
+## Wars (`/war`, war watch, chain guard)
+
+Torn's API doesn't show other players' battle stats, so strength comes
+from [FF Scouter](https://ffscouter.com)'s estimates (public estimates,
+spies, or your faction's TornStats spies, whichever is newest).
+**Fair fight** (FF) = 1 + 8/3 × (their battle stat score ÷ yours): about 1
+for much weaker players, 3 at 75% of your strength, and above 3 for
+stronger ones. Respect stops growing at FF 3, so above `WAR_MAX_FF` a
+target only adds risk; they're listed as too strong. Players with no
+estimate show `FF ?` and count as beatable — check them before you hit.
+
+"Hittable" means Okay in Torn when you're in Torn, or in the same country
+when you're abroad. Names in `/war` and the DMs link to the attack page.
+
+- **War watch** runs only while your faction is in a ranked war — no
+  toggling per war. It polls the enemy roster every `WAR_POLL_SECONDS`, and
+  also right when a beatable target is due out of hospital or jail, so
+  early revives are caught within one poll. It DMs only while you can
+  attack (not traveling or in hospital). The first look at a new war
+  sends one "war watch on" message rather than listing everyone.
+- **Chain guard** watches your faction's chain all the time, war or not.
+  It checks again right as the timer crosses `CHAIN_GUARD_SECONDS`, so a
+  hit before then cancels the DM. One DM per lull.
+
+Both are on by default; the toggles are kept in `war.json` (git-ignored)
+so restarts don't reset them. Nothing here attacks for you — it only
+reads the API and messages you.
 
 ## State file
 
