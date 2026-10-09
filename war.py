@@ -91,17 +91,19 @@ class War:
             return
         self.watch = state.get("watch", True)
         self.chain_guard = state.get("chain_guard", True)
+        self.watched_war = state.get("watched_war")
 
     def _save(self) -> None:
         tmp = self.path + ".tmp"
         with open(tmp, "w") as f:
-            json.dump({"watch": self.watch, "chain_guard": self.chain_guard}, f)
+            json.dump({"watch": self.watch, "chain_guard": self.chain_guard,
+                       "watched_war": self.watched_war}, f)
         os.replace(tmp, self.path)
 
     def set_watch(self, on: bool) -> None:
         self.watch = on
         self.members = {}
-        self.watched_war = None
+        self.watched_war = None  # turning it back on announces the war again
         self._save()
 
     def set_chain_guard(self, on: bool) -> None:
@@ -172,7 +174,7 @@ class War:
         ff, human, _ = self.ff.get(player_id, (None, None, 0.0))
         if ff is None:
             return "FF ?"
-        return f"FF {ff:.2f}" + (f" (~{human})" if human else "")
+        return f"FF {ff:.2f}" + (f" · ~{human}" if human else "")
 
     def _by_ff(self, members: list[dict]) -> list[dict]:
         """Highest fair fight first (most respect), unknown estimates last."""
@@ -267,7 +269,7 @@ class War:
             return [], self.poll_seconds
         war = await self.ranked_war(session)
         if war is None or war["start"] > time.time():
-            self.members, self.watched_war = {}, None
+            self.members = {}
             wait = WAR_IDLE_SECONDS if war is None else min(WAR_IDLE_SECONDS, war["start"] - time.time() + 5)
             return [], max(wait, MIN_POLL_SECONDS)
 
@@ -279,8 +281,9 @@ class War:
 
         messages = []
         if war["war_id"] != self.watched_war:
-            # First look at this war: just remember everyone, don't DM the whole roster.
+            # A new war: announce it once (remembered across restarts).
             self.watched_war, self.members = war["war_id"], {}
+            self._save()
             messages.append(f"⚔️ War watch on: vs **{enemy['name']}**. I'll DM when someone you can beat "
                             f"becomes hittable where you are. /war for the full list; /war-watch off to stop.")
         freed = [m for m in members
@@ -290,8 +293,8 @@ class War:
         if self.my_place:
             hittable = [m for m in self._by_ff(freed) if place(m["status"]) == self.my_place]
             if hittable:
-                messages.append("🎯 Hittable now: " + " · ".join(
-                    f"{link(m)} ({self._ff_text(m['id'])})" for m in hittable[:10]))
+                messages.append("🎯 Hittable now:\n" + "\n".join(
+                    f"{link(m)} {self._ff_text(m['id'])}" for m in hittable[:10]))
 
         # Wake right as the next beatable target is due out, rather than polling fast all the time.
         due = [m["status"]["until"] for m in members if self.in_range(m["id"])
@@ -321,7 +324,7 @@ class War:
         text = f"⛓️ Chain at **{current:,}** drops in ~{timeout}s — hit someone!"
         target = self._chain_target()
         if target:
-            text += f" Best hittable war target: {link(target)} ({self._ff_text(target['id'])})"
+            text += f" Best hittable war target: {link(target)} {self._ff_text(target['id'])}"
         return [text], self.poll_seconds
 
     def _chain_target(self) -> dict | None:
