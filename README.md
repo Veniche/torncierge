@@ -30,6 +30,7 @@ the bot's DMs give you the same report and more on demand — see
 | `/spend-remove name` | — | Remove an entry (names autocomplete). |
 | `/sell item:<name> [qty]` | — | One item in detail: every way to sell it, for `qty` units (default: your travel capacity). Checks its live lowest listing. Item names autocomplete. |
 | `/war [faction]` | — | The enemy in your faction's ranked war (or any `faction` ID): who you can beat and hit right now where you are, sorted by fair fight, with attack links; who's out of hospital soon or elsewhere; who's too strong. Plus the war score and your energy and life. |
+| `/war-stats [faction]` | — | Every member of the enemy faction (or any `faction` ID) with fair fight, estimated total battle stats, how old the estimate is and where it came from, and their status — weakest first. Your own stats on top for comparison. |
 | `/war-watch [on\|off]` | — | Turn the war-watch DM on or off (no option: show the current setting). On by default. |
 | `/chain-guard [on\|off]` | — | Turn the chain-timeout DM on or off (no option: show the current setting). On by default. |
 
@@ -47,7 +48,8 @@ until then, typing the name just sends a plain message the bot ignores.
 | Right after the alert for a landing in Torn | The `/travel` stock report |
 | Drug cooldown reaches 0 | 💊 Drug cooldown is over |
 | A rented property's lease reaches a `RENT_ALERT_DAYS` value | 🏝️ *Property* lease: *N* day(s) left — renewing costs ≈ *last lease cost* |
-| During a ranked war (war watch on), someone you can beat becomes hittable where you are | 🎯 Hittable now: *names with attack links* |
+| During a ranked war (war watch on), `WAR_ALERT_LEAD_SECONDS` before someone you can beat leaves hospital or jail where you are | ⏰ Out soon: *names with attack links and countdowns* |
+| During a ranked war, someone you can beat becomes hittable where you are without warning (revived early, landed) | 🎯 Hittable now: *names with attack links* |
 | Your faction's chain (10+ hits) has under `CHAIN_GUARD_SECONDS` left (chain guard on) | ⛓️ Chain at *N* drops in ~*s* — with the best hittable war target |
 | A stock dividend you hold a block for is ready | 💰 *STOCK* dividend ready — *payout* (once per dividend; again after a restart if still uncollected) |
 
@@ -154,6 +156,8 @@ journalctl -u torncierge -f           # tail logs
   attacks with it. Without it, everyone counts as beatable.
 - `WAR_MAX_FF` — highest fair fight that counts as beatable (default 3).
 - `WAR_POLL_SECONDS` — how often war watch and chain guard check (default 30).
+- `WAR_ALERT_LEAD_SECONDS` — how long before a target leaves hospital
+  war watch DMs you (default 30).
 - `CHAIN_GUARD_SECONDS` / `CHAIN_GUARD_MIN_HITS` — DM when a chain of at
   least this many hits (default 10) has fewer seconds left (default 90).
 - `STOCK_POLL_SECONDS` — how often stock snapshots are taken (default 300).
@@ -248,7 +252,8 @@ from [FF Scouter](https://ffscouter.com)'s estimates (public estimates,
 spies, or your faction's TornStats spies, whichever is newest).
 **Fair fight** (FF) = 1 + 8/3 × (their battle stat score ÷ yours): about 1
 for much weaker players, 3 at 75% of your strength, and above 3 for
-stronger ones. Respect stops growing at FF 3, so above `WAR_MAX_FF` a
+stronger ones. FF only compares battle stat *scores*; weapons, armor and how your stats
+are split still decide the fight. Respect stops growing at FF 3, so above `WAR_MAX_FF` a
 target only adds risk; they're listed as too strong. Players with no
 estimate show `FF ?` and count as beatable — check them before you hit.
 
@@ -256,16 +261,18 @@ estimate show `FF ?` and count as beatable — check them before you hit.
 when you're abroad. Names in `/war` and the DMs link to the attack page.
 
 - **War watch** runs only while your faction is in a ranked war — no
-  toggling per war. It polls the enemy roster every `WAR_POLL_SECONDS`, and
-  also right when a beatable target is due out of hospital or jail, so
-  early revives are caught within one poll. It DMs only while you can
-  attack (not traveling or in hospital). The first look at a new war
-  sends one "war watch on" message rather than listing everyone.
+  toggling per war. Hospital and jail release times are known ahead, so it
+  wakes `WAR_ALERT_LEAD_SECONDS` before a beatable target is due out where
+  you are and DMs a countdown — like the landing alert. Releases nobody
+  can predict (revives, meds, someone landing) are caught by polling the
+  roster every `WAR_POLL_SECONDS` and DM'd as "hittable now". It DMs only
+  while you can attack (not traveling or in hospital), never twice for the
+  same release, and announces each new war once.
 - **Chain guard** watches your faction's chain all the time, war or not.
   It checks again right as the timer crosses `CHAIN_GUARD_SECONDS`, so a
   hit before then cancels the DM. One DM per lull.
 
-Both are on by default; the toggles are kept in `war.json` (git-ignored)
+Both are on by default; the toggles (and the last war announced) are kept in `war.json` (git-ignored)
 so restarts don't reset them. Nothing here attacks for you — it only
 reads the API and messages you.
 

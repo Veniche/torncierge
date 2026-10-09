@@ -61,6 +61,8 @@ KEEP_ITEMS = [n.strip() for n in (os.getenv("KEEP_ITEMS") or "").split(",") if n
 FF_SCOUTER_KEY = os.getenv("FF_SCOUTER_KEY") or None
 WAR_MAX_FF = float(os.getenv("WAR_MAX_FF", "3"))
 WAR_POLL_SECONDS = int(os.getenv("WAR_POLL_SECONDS", "30"))
+# How long before a target leaves hospital war watch DMs you.
+WAR_ALERT_LEAD_SECONDS = int(os.getenv("WAR_ALERT_LEAD_SECONDS", "30"))
 CHAIN_GUARD_SECONDS = int(os.getenv("CHAIN_GUARD_SECONDS", "90"))
 CHAIN_GUARD_MIN_HITS = int(os.getenv("CHAIN_GUARD_MIN_HITS", "10"))
 STATE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state.json")
@@ -109,7 +111,7 @@ SPENDING_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "spendi
 spend = spending.Spending(SPENDING_PATH, TORN_API_KEY, item_buy_price)
 WAR_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "war.json")
 wars = war.War(WAR_PATH, TORN_API_KEY, FF_SCOUTER_KEY, WAR_MAX_FF, WAR_POLL_SECONDS,
-               CHAIN_GUARD_SECONDS, CHAIN_GUARD_MIN_HITS)
+               WAR_ALERT_LEAD_SECONDS, CHAIN_GUARD_SECONDS, CHAIN_GUARD_MIN_HITS)
 
 # Arrival timestamp we've already scheduled an alert for, so a repeat
 # poll of the same trip doesn't schedule a second alert.
@@ -472,7 +474,35 @@ async def war_command(interaction: discord.Interaction, faction: Optional[int] =
         log.error("War report failed: %s", exc)
         await interaction.followup.send(f"Couldn't build the war report: {exc}")
         return
-    await interaction.followup.send(embeds=[discord.Embed.from_dict(e) for e in embeds])
+    await send_embeds(interaction, embeds)
+
+
+async def send_embeds(interaction: discord.Interaction, embeds: list[dict]) -> None:
+    """Follow up with embeds, split over messages to stay under Discord's 6,000 characters each."""
+    batch: list[discord.Embed] = []
+    size = 0
+    for e in embeds:
+        embed = discord.Embed.from_dict(e)
+        if batch and (size + len(embed) > 5800 or len(batch) == 10):
+            await interaction.followup.send(embeds=batch)
+            batch, size = [], 0
+        batch.append(embed)
+        size += len(embed)
+    await interaction.followup.send(embeds=batch)
+
+
+@app_commands.describe(faction="Faction ID (default: your ranked war's enemy)")
+async def war_stats_command(interaction: discord.Interaction, faction: Optional[int] = None) -> None:
+    if not await owner_only(interaction):
+        return
+    await interaction.response.defer(thinking=True)
+    try:
+        embeds = await wars.stats_embeds(http, faction)
+    except Exception as exc:
+        log.error("War stats failed: %s", exc)
+        await interaction.followup.send(f"Couldn't get the faction's stats: {exc}")
+        return
+    await send_embeds(interaction, embeds)
 
 
 ON_OFF = [app_commands.Choice(name="on", value="on"), app_commands.Choice(name="off", value="off")]
@@ -520,6 +550,7 @@ COMMANDS = [
     (["spend-add"], "Add or replace a spending entry (cash or items, one-off or repeating)", spend_add_command),
     (["spend-remove"], "Remove a spending entry", spend_remove_command),
     (["war"], "Enemy faction: who you can beat and hit right now, who's out soon", war_command),
+    (["war-stats"], "Enemy faction: every member's estimated battle stats and fair fight", war_stats_command),
     (["war-watch"], "Turn the ranked-war DM (beatable target hittable) on or off", war_watch_command),
     (["chain-guard"], "Turn the chain timeout DM on or off", chain_guard_command),
 ]
