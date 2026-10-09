@@ -27,6 +27,7 @@ from discord import app_commands
 from dotenv import load_dotenv
 
 import spending
+import gym
 import market
 import travel
 import war
@@ -109,6 +110,7 @@ def item_buy_price(name: str) -> tuple[int, str] | None:
 RENT_ALERT_DAYS = [int(d) for d in (os.getenv("RENT_ALERT_DAYS") or "1").split(",") if d.strip()]
 SPENDING_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "spending.json")
 spend = spending.Spending(SPENDING_PATH, TORN_API_KEY, item_buy_price)
+gym_advisor = gym.Gym(TORN_API_KEY)
 WAR_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "war.json")
 wars = war.War(WAR_PATH, TORN_API_KEY, FF_SCOUTER_KEY, WAR_MAX_FF, WAR_POLL_SECONDS,
                WAR_ALERT_LEAD_SECONDS, CHAIN_GUARD_SECONDS, CHAIN_GUARD_MIN_HITS)
@@ -505,6 +507,23 @@ async def war_stats_command(interaction: discord.Interaction, faction: Optional[
     await send_embeds(interaction, embeds)
 
 
+@app_commands.describe(energy="Energy to spend (default: what you have now)",
+                       happy="What-if happiness, e.g. after an Ecstasy for a happy jump (default: yours now)")
+async def gym_command(interaction: discord.Interaction,
+                      energy: Optional[app_commands.Range[int, 1, 100000]] = None,
+                      happy: Optional[app_commands.Range[int, 0, 1000000]] = None) -> None:
+    if not await owner_only(interaction):
+        return
+    await interaction.response.defer(thinking=True)
+    try:
+        embed = await gym_advisor.report_embed(http, energy, happy)
+    except Exception as exc:
+        log.error("Gym report failed: %s", exc)
+        await interaction.followup.send(f"Couldn't build the gym report: {exc}")
+        return
+    await interaction.followup.send(embed=discord.Embed.from_dict(embed))
+
+
 ON_OFF = [app_commands.Choice(name="on", value="on"), app_commands.Choice(name="off", value="off")]
 
 
@@ -549,6 +568,8 @@ COMMANDS = [
     (["spend"], "What you'll need to pay: rent, upkeep and your entries, until next rent", spend_command),
     (["spend-add"], "Add or replace a spending entry (cash or items, one-off or repeating)", spend_add_command),
     (["spend-remove"], "Remove a spending entry", spend_remove_command),
+    (["gym"], "What your energy buys in each stat at your gym, and which raises your battle score most",
+     gym_command),
     (["war"], "Enemy faction: who you can beat and hit right now, who's out soon", war_command),
     (["war-stats"], "Enemy faction: every member's estimated battle stats and fair fight", war_stats_command),
     (["war-watch"], "Turn the ranked-war DM (beatable target hittable) on or off", war_watch_command),

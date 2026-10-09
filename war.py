@@ -52,6 +52,13 @@ HOSPITAL_COUNTRIES = {
 }
 # FF Scouter's source names: public stat-score estimate, paid spy, your faction's spies.
 SOURCES = {"bss": "estimate", "premium": "spy", "spies": "faction spy"}
+# Enemy activity: sample who's online at most this often, and forget
+# factions not seen for this long.
+ACTIVITY_SAMPLE_SECONDS = 60
+ACTIVITY_KEEP_SECONDS = 30 * 86400
+# Hours with fewer samples than this show as unknown.
+ACTIVITY_MIN_SAMPLES = 5
+BARS = "▁▂▃▄▅▆▇█"
 STATUS_ICONS = {"Okay": "🟢", "Hospital": "🏥", "Jail": "🔒", "Traveling": "✈️", "Abroad": "📍"}
 
 
@@ -111,6 +118,8 @@ class War:
         self.announced: set[tuple[int, int]] = set()
         # (chain id, hit count) already warned about, so one lull gives one DM.
         self.chain_warned: tuple[int, int] | None = None
+        # faction id (str) -> {"name", "last": sampled at, "hours": [[samples, online total] × 24 TCT hours]}
+        self.activity: dict[str, dict] = {}
         self._load()
 
     # --- persistence -----------------------------------------------------
@@ -127,12 +136,13 @@ class War:
         self.watch = state.get("watch", True)
         self.chain_guard = state.get("chain_guard", True)
         self.watched_war = state.get("watched_war")
+        self.activity = state.get("activity", {})
 
     def _save(self) -> None:
         tmp = self.path + ".tmp"
         with open(tmp, "w") as f:
             json.dump({"watch": self.watch, "chain_guard": self.chain_guard,
-                       "watched_war": self.watched_war}, f)
+                       "watched_war": self.watched_war, "activity": self.activity}, f)
         os.replace(tmp, self.path)
 
     def set_watch(self, on: bool) -> None:
@@ -278,6 +288,9 @@ class War:
         lines = [f"{link(m)} · {self._ff_text(m['id'])} · {self._when(m['status'])}" for m in later]
         if lines:
             embeds.append({"title": f"⏳ Later ({len(later)})", "description": self._cap(lines)})
+        activity = self.activity_embed(faction_id)
+        if activity:
+            embeds.append(activity)
         if strong:
             names = ", ".join(f"{m['name']} ({self.fair_fight(m['id']):.1f})" for m in self._by_ff(strong))
             embeds.append({"title": f"🚫 Too strong (FF > {self.max_ff:g}) ({len(strong)})", "description": names[:4000]})
@@ -383,6 +396,7 @@ class War:
         held = [m for m in members if self.in_range(m["id"])
                 and m["status"]["state"] in ("Hospital", "Jail") and m["status"].get("until")]
         self.members = {m["id"]: m for m in members}
+        self._record_activity(enemy, members)
         self.announced = {a for a in self.announced if a[1] > now - 600}
         if self.my_place:
             # Due out within the lead time, where you are: tell you before it happens.
@@ -406,6 +420,59 @@ class War:
         if due:
             wait = min(wait, min(due) - now)
         return messages, max(wait, MIN_POLL_SECONDS)
+
+    # --- enemy activity --------------------------------------------------
+
+    def _record_activity(self, faction: dict, members: list[dict]) -> None:
+        """Note how many enemy members are online this hour (TCT, i.e. UTC)."""
+        now = time.time()
+        key = str(faction["id"])
+        data = self.activity.setdefault(key, {"name": faction["name"], "last": 0, "hours": [[0, 0] for _ in range(24)]})
+        if now - data["last"] < ACTIVITY_SAMPLE_SECONDS:
+            return
+        hour = time.gmtime(now).tm_hour
+        data["hours"][hour][0] += 1
+        data["hours"][hour][1] += sum(1 for m in members if m["last_action"]["status"] == "Online")
+        data["last"] = now
+        self.activity = {k: v for k, v in self.activity.items() if now - v["last"] < ACTIVITY_KEEP_SECONDS}
+        self._save()
+
+    def activity_embed(self, faction_id: int) -> dict | None:
+        """A 24-hour bar of how many were online, from what war watch has seen."""
+        data = self.activity.get(str(faction_id))
+        if not data:
+            return None
+        avg = [h[1] / h[0] if h[0] >= ACTIVITY_MIN_SAMPLES else None for h in data["hours"]]
+        known = [a for a in avg if a is not None]
+        if not known:
+            return {"title": "🕒 Enemy activity (TCT)", "description": "Still collecting — check back in an hour."}
+        top = max(known) or 1
+        bar = "".join("·" if a is None else BARS[round(a / top * (len(BARS) - 1))] for a in avg)
+        now_hour = time.gmtime().tm_hour
+        marker = " " * now_hour + "▲ now"
+
+        def window(best: bool) -> tuple[int, float] | None:
+            """Busiest (or quietest) 3-hour stretch, wrapping past midnight."""
+            spans = []
+            for start in range(24):
+                hours = [avg[(start + i) % 24] for i in range(3)]
+                if None not in hours:
+                    spans.append((sum(hours) / 3, start))
+            if not spans:
+                return None
+            value, start = (max(spans, key=lambda x: (x[0], -x[1])) if best else min(spans))
+            return start, value
+
+        notes = []
+        for label, w in (("most online", window(True)), ("quietest", window(False))):
+            if w:
+                notes.append(f"{label} {w[0]:02d}–{(w[0] + 3) % 24:02d} (avg {w[1]:.1f})")
+        if avg[now_hour] is not None:
+            notes.append(f"this hour avg {avg[now_hour]:.1f}")
+        watched = sum(h[0] for h in data["hours"]) * ACTIVITY_SAMPLE_SECONDS / 3600
+        return {"title": "🕒 Enemy activity (TCT)",
+                "description": f"```\n{bar}\n0     6     12    18\n{marker}\n```"
+                               f"{' · '.join(notes)}\nMembers online, from ~{watched:.0f}h of war watch (· = no data yet)"}
 
     # --- chain guard -----------------------------------------------------
 

@@ -29,7 +29,8 @@ the bot's DMs give you the same report and more on demand — see
 | `/spend-add name amount every [due]` | — | Add or replace an entry. `amount`: cash (`4m`) or items (`5 xanax`, priced at the lowest listing). `every`: `once`, `daily`, `weekly` or `7d`. `due`: `today`, `tomorrow` or `3d` (optional). |
 | `/spend-remove name` | — | Remove an entry (names autocomplete). |
 | `/sell item:<name> [qty]` | — | One item in detail: every way to sell it, for `qty` units (default: your travel capacity). Checks its live lowest listing. Item names autocomplete. |
-| `/war [faction]` | — | The enemy in your faction's ranked war (or any `faction` ID): who you can beat and hit right now where you are, sorted by fair fight, with attack links; who's out of hospital soon or elsewhere; who's too strong. Plus the war score and your energy and life. |
+| `/war [faction]` | — | The enemy in your faction's ranked war (or any `faction` ID): who you can beat and hit right now where you are, sorted by fair fight, with attack links; who's out of hospital soon or elsewhere; who's too strong. Plus the war score, your energy and life, and a 24-hour chart of when the enemy is online. |
+| `/gym [energy] [happy]` | — | What your energy (or `energy`) buys in each stat at your current gym, with your gym perks, and how much each raises your battle stat score. ⭐ marks your weakest attack stat. `happy` is a what-if, e.g. planning a happy jump. |
 | `/war-stats [faction]` | — | Every member of the enemy faction (or any `faction` ID) with fair fight, estimated total battle stats, how old the estimate is and where it came from, and their status — weakest first. Your own stats on top for comparison. |
 | `/war-watch [on\|off]` | — | Turn the war-watch DM on or off (no option: show the current setting). On by default. |
 | `/chain-guard [on\|off]` | — | Turn the chain-timeout DM on or off (no option: show the current setting). On by default. |
@@ -275,9 +276,33 @@ when you're abroad. Names in `/war` and the DMs link to the attack page.
   It checks again right as the timer crosses `CHAIN_GUARD_SECONDS`, so a
   hit before then cancels the DM. One DM per lull.
 
-Both are on by default; the toggles (and the last war announced) are kept in `war.json` (git-ignored)
+- **Enemy activity.** While war watch runs, it notes how many enemy
+  members are online, once a minute, by hour of day (TCT). `/war` draws
+  that as a 24-hour bar with the busiest and quietest 3-hour stretches —
+  when to save energy and when targets will be around. It starts empty and
+  fills in as the war goes on (hours not seen yet show `·`); data for a
+  faction is kept 30 days after it was last seen.
+
+Both are on by default; the toggles, the last war announced and the activity data are kept in `war.json` (git-ignored)
 so restarts don't reset them. Nothing here attacks for you — it only
 reads the API and messages you.
+
+## Gym (`/gym`)
+
+Torn doesn't publish its training formula; `/gym` uses Vladar's,
+worked out by players (the version the Torn wiki recommends):
+gain per train = perks × gym multiplier × energy per train ×
+[(a·ln(happy + 250) + c) · stat + d · (happy + 250) + e]. Each train is
+simulated in turn because happiness drops by about half the energy used
+(40–60% at random). Gym multipliers and energy cost come from the Torn
+API, and gym-gain perks (faction, property, education…) are read from
+your perks. Expect results within a few percent.
+
+What to train isn't only arithmetic. STR is your damage and SPD your hit
+chance; DEF and DEX reduce what you take. ⭐ marks the lower of STR and
+SPD, the usual reason attacks fail. Raising your battle stat score also
+lowers every target's fair fight: less respect per hit, but more targets
+in range.
 
 ## State file
 
