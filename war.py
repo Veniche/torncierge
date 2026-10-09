@@ -5,8 +5,8 @@ before your faction's chain times out.
 
 Other players' battle stats aren't in Torn's API, so strength comes from
 FF Scouter's estimates. Fair fight (FF) = 1 + 8/3 × (their battle stat
-score ÷ yours). Respect stops growing at FF 3, so targets above the
-WAR_MAX_FF cutoff (default 3) only add risk.
+score ÷ yours). Respect stops growing at FF 3, so targets between 3 and
+the WAR_MAX_FF cutoff are marked 💪 tough fight: more risk, no more respect.
 """
 
 from __future__ import annotations
@@ -37,6 +37,8 @@ WAR_IDLE_SECONDS = 300
 # Never poll faster than this, even when a release is due any second.
 MIN_POLL_SECONDS = 5
 ATTACK_ENERGY = 25
+# Respect stops growing here (75% of your battle stat score); above it is a tough fight.
+RESPECT_CAP_FF = 3.0
 # Lines per /war section, to stay under Discord's embed limits.
 MAX_LINES = 15
 # Lines per /war-stats embed (each embed holds up to 4,096 characters).
@@ -209,7 +211,8 @@ class War:
         ff, human = self.fair_fight(player_id), self.ff.get(player_id, {}).get("human")
         if ff is None:
             return "FF ?"
-        return f"FF {ff:.2f}" + (f" · ~{human}" if human else "")
+        tough = " 💪 tough fight" if ff > RESPECT_CAP_FF else ""
+        return f"FF {ff:.2f}" + (f" · ~{human}" if human else "") + tough
 
     def _by_ff(self, members: list[dict]) -> list[dict]:
         """Highest fair fight first (most respect), unknown estimates last."""
@@ -277,7 +280,7 @@ class War:
             embeds.append({"title": f"⏳ Later ({len(later)})", "description": self._cap(lines)})
         if strong:
             names = ", ".join(f"{m['name']} ({self.fair_fight(m['id']):.1f})" for m in self._by_ff(strong))
-            embeds.append({"title": f"💪 Too strong (FF > {self.max_ff:g}) ({len(strong)})", "description": names[:4000]})
+            embeds.append({"title": f"🚫 Too strong (FF > {self.max_ff:g}) ({len(strong)})", "description": names[:4000]})
         source = ("FF from FF Scouter estimates" if self.ff_key
                   else "no FF_SCOUTER_KEY set — strength unknown, everyone counts as beatable")
         embeds[-1]["footer"] = {"text": f"{source} · names open the attack page · "
@@ -304,7 +307,8 @@ class War:
             if est.get("ff") is None:
                 lines.append(f"`  ?  ` {icon} **{m['name']}** · Lv{m['level']} · no estimate")
                 continue
-            strong = " 💪" if est["ff"] > self.max_ff else ""
+            strong = (" 🚫 too strong" if est["ff"] > self.max_ff
+                      else " 💪 tough fight" if est["ff"] > RESPECT_CAP_FF else "")
             source = SOURCES.get(est.get("source"), est.get("source") or "estimate")
             seen = f" · {source} {age(now - est['updated'])} old" if est.get("updated") else ""
             ff = f"{est['ff']:5.2f}" if est["ff"] < 100 else "  99+"
@@ -316,7 +320,9 @@ class War:
                f"DEX {mine['dexterity']['value']:,}")
         embeds = [{"title": f"📊 {name} — estimated stats ({len(members)})",
                    "description": you + "\nFF first (weakest at the top), then estimated total battle stats. "
-                                        f"💪 = above FF {self.max_ff:g}."}]
+                                        f"💪 tough fight = FF {RESPECT_CAP_FF:g}–{self.max_ff:g} "
+                                        f"(no extra respect past {RESPECT_CAP_FF:g}) · "
+                                        f"🚫 = above FF {self.max_ff:g}, left out of /war and war watch."}]
         for start in range(0, len(lines), STATS_LINES_PER_EMBED):
             embeds.append({"description": "\n".join(lines[start:start + STATS_LINES_PER_EMBED])})
         source = "FF Scouter estimates" if self.ff_key else "no FF_SCOUTER_KEY set — no estimates"

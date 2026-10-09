@@ -155,6 +155,8 @@ journalctl -u torncierge -f           # tail logs
   Limited key, not `TORN_API_KEY`: FF Scouter reads your battle stats and
   attacks with it. Without it, everyone counts as beatable.
 - `WAR_MAX_FF` — highest fair fight that counts as beatable (default 3).
+  Above 3 targets are marked 💪 tough fight: they pay no more respect than
+  FF 3, only more risk.
 - `WAR_POLL_SECONDS` — how often war watch and chain guard check (default 30).
 - `WAR_ALERT_LEAD_SECONDS` — how long before a target leaves hospital
   war watch DMs you (default 30).
@@ -253,8 +255,9 @@ spies, or your faction's TornStats spies, whichever is newest).
 **Fair fight** (FF) = 1 + 8/3 × (their battle stat score ÷ yours): about 1
 for much weaker players, 3 at 75% of your strength, and above 3 for
 stronger ones. FF only compares battle stat *scores*; weapons, armor and how your stats
-are split still decide the fight. Respect stops growing at FF 3, so above `WAR_MAX_FF` a
-target only adds risk; they're listed as too strong. Players with no
+are split still decide the fight. Respect stops growing at FF 3, so targets above that are marked 💪 tough
+fight wherever they appear; above `WAR_MAX_FF` they're left out of `/war`'s
+hit lists and war watch, and listed as 🚫 too strong. Players with no
 estimate show `FF ?` and count as beatable — check them before you hit.
 
 "Hittable" means Okay in Torn when you're in Torn, or in the same country
